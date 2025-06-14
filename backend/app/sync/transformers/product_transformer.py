@@ -1,4 +1,4 @@
-# backend/app/sync/transformers/product_transformer.py
+# backend/app/sync/transformers/product_transformer.py - VERSION FINALE CORRIGÉE
 from typing import List, Dict, Any
 from datetime import datetime
 from loguru import logger
@@ -8,8 +8,7 @@ import re
 class ProductTransformer:
     """
     Transformateur pour les données de produits HFSQL → PostgreSQL
-
-    Adapte les formats de données de la table nomenclature vers products_catalog
+    VERSION CORRIGÉE : Sans prix + avec nouveaux champs essentiels (labo, CNAS, etc.)
     """
 
     def __init__(self):
@@ -18,23 +17,29 @@ class ProductTransformer:
     def _get_field_mapping(self) -> Dict[str, str]:
         """
         Mappage des champs HFSQL nomenclature → PostgreSQL products_catalog
+        VERSION CORRIGÉE SANS PRIX
         """
         return {
             # Champs de base
             'id': 'hfsql_id',
             'nom': 'name',
-            'code_barre': 'barcode',
             'famille': 'family',
-            'fournisseur': 'supplier',
-
-            # Prix
-            'prix_achat': 'price_buy',
-            'prix_vente': 'price_sell',
-            'marge': 'margin',
-
-            # Stock
             'quantite_alerte': 'alert_quantity',
-            'stock_actuel': 'current_stock'
+
+            # NOUVEAUX CHAMPS ESSENTIELS
+            'labo': 'labo',  # Laboratoire
+            'id_cnas': 'id_cnas',  # ID CNAS
+            'de_equiv': 'de_equiv',  # Code produit équivalent
+            'psychotrope': 'psychotrope',  # Médicament psychotrope (Boolean)
+            'code_barre_origine': 'code_barre_origine',  # Code-barres d'origine
+
+            # CHAMPS SUPPRIMÉS (maintenant dans table purchase_details) :
+            # 'prix_achat' -> SUPPRIMÉ
+            # 'prix_vente' -> SUPPRIMÉ
+            # 'marge' -> SUPPRIMÉ
+            # 'stock_actuel' -> SUPPRIMÉ
+            # 'fournisseur' -> SUPPRIMÉ
+            # 'code_barre' -> Remplacé par code_barre_origine
         }
 
     async def transform_batch(self, hfsql_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -57,7 +62,7 @@ class ProductTransformer:
 
     async def transform_single_record(self, hfsql_record: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Transforme un enregistrement de produit individuel
+        Transforme un enregistrement de produit individuel - VERSION CORRIGÉE
         """
         try:
             transformed = {}
@@ -67,42 +72,44 @@ class ProductTransformer:
                 if hfsql_field in hfsql_record:
                     transformed[pg_field] = hfsql_record[hfsql_field]
 
-            # 2. Transformations spécifiques
+            # 2. Conversion critique de l'ID
+            if 'hfsql_id' in transformed:
+                transformed['hfsql_id'] = self._convert_to_int(transformed['hfsql_id'])
+
+            # 3. Transformations spécifiques
 
             # Nettoyage du nom de produit
             if 'name' in transformed:
                 transformed['name'] = self._clean_product_name(transformed['name'])
 
-            # Nettoyage du code-barres
-            if 'barcode' in transformed:
-                transformed['barcode'] = self._clean_barcode(transformed['barcode'])
+            # Nettoyage du code-barres d'origine
+            if 'code_barre_origine' in transformed:
+                transformed['code_barre_origine'] = self._clean_barcode(transformed['code_barre_origine'])
 
             # Nettoyage des chaînes
-            string_fields = ['family', 'supplier']
+            string_fields = ['family', 'labo', 'id_cnas', 'de_equiv']
             for field in string_fields:
                 if field in transformed:
                     transformed[field] = self._clean_string(transformed[field])
 
-            # Conversion des prix
-            price_fields = ['price_buy', 'price_sell', 'margin']
-            for field in price_fields:
-                if field in transformed:
-                    transformed[field] = self._convert_to_decimal(transformed[field])
+            # Conversion du champ psychotrope en booléen
+            if 'psychotrope' in transformed:
+                transformed['psychotrope'] = self._convert_to_boolean(transformed['psychotrope'])
 
             # Conversion des quantités
-            qty_fields = ['alert_quantity', 'current_stock']
+            qty_fields = ['alert_quantity']
             for field in qty_fields:
                 if field in transformed:
                     transformed[field] = self._convert_to_int(transformed[field])
 
-            # 3. Ajout des métadonnées de synchronisation
+            # 4. Ajout des métadonnées de synchronisation
             transformed.update({
                 'sync_version': 1,
                 'last_synced_at': datetime.now(),
                 'created_at': datetime.now()
             })
 
-            # 4. Validation finale
+            # 5. Validation finale
             if not self._validate_transformed_record(transformed):
                 logger.warning(f"⚠️ Produit invalide, ignoré: {hfsql_record.get('id', 'inconnu')}")
                 return None
@@ -168,67 +175,82 @@ class ProductTransformer:
         # Suppression des caractères de contrôle
         cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
 
-        # Limitation de longueur
-        if len(cleaned) > 255:
-            cleaned = cleaned[:255]
+        # Limitation de longueur appropriée selon le champ
+        max_length = 255  # Par défaut
+        if len(cleaned) > max_length:
+            cleaned = cleaned[:max_length]
 
         return cleaned
 
-    def _convert_to_decimal(self, value: Any) -> float:
+    def _convert_to_boolean(self, value: Any) -> bool:
         """
-        Convertit une valeur vers un décimal (float)
+        Convertit une valeur vers un booléen
         """
         try:
-            if value is None or value == '':
-                return 0.0
+            if value is None:
+                return False
+
+            if isinstance(value, bool):
+                return value
 
             if isinstance(value, (int, float)):
-                return float(value)
+                return bool(value)
 
             if isinstance(value, str):
-                # Suppression des espaces et caractères non numériques
-                cleaned = re.sub(r'[^\d.,-]', '', value.strip())
+                value_lower = value.lower().strip()
+                # Valeurs considérées comme True
+                true_values = ['true', '1', 'oui', 'yes', 'o', 'y', 'vrai']
+                return value_lower in true_values
 
-                # Gestion des virgules comme séparateurs décimaux
-                cleaned = cleaned.replace(',', '.')
-
-                if cleaned:
-                    return float(cleaned)
-
-            return 0.0
+            return bool(value)
 
         except Exception as e:
-            logger.warning(f"⚠️ Erreur conversion décimal {value}: {e}")
-            return 0.0
+            logger.warning(f"⚠️ Erreur conversion booléen {value}: {e}")
+            return False
 
     def _convert_to_int(self, value: Any) -> int:
         """
-        Convertit une valeur vers un entier
+        Convertit une valeur vers un entier - VERSION RENFORCÉE
         """
         try:
             if value is None or value == '':
                 return 0
 
+            # Si c'est déjà un entier
             if isinstance(value, int):
                 return value
 
+            # Si c'est un float, arrondir
             if isinstance(value, float):
+                if value != value:  # NaN check
+                    return 0
                 return int(round(value))
 
+            # Si c'est une chaîne, nettoyer et convertir
             if isinstance(value, str):
-                cleaned = re.sub(r'[^\d-]', '', value.strip())
-                if cleaned:
+                # Supprimer les espaces
+                cleaned = value.strip()
+
+                # Vide après nettoyage
+                if not cleaned:
+                    return 0
+
+                # Supprimer tout sauf les chiffres et le signe moins
+                cleaned = re.sub(r'[^\d-]', '', cleaned)
+
+                if cleaned and cleaned != '-':
                     return int(cleaned)
 
-            return 0
+            # Essayer une conversion directe
+            return int(float(str(value)))
 
-        except Exception as e:
-            logger.warning(f"⚠️ Erreur conversion entier {value}: {e}")
+        except (ValueError, TypeError, OverflowError) as e:
+            logger.warning(f"⚠️ Erreur conversion entier {value}: {e}, utilisation 0")
             return 0
 
     def _validate_transformed_record(self, record: Dict[str, Any]) -> bool:
         """
-        Valide qu'un enregistrement transformé est correct
+        Valide qu'un enregistrement transformé est correct - VERSION CORRIGÉE FINALE
         """
         try:
             # Vérifications obligatoires
@@ -239,23 +261,37 @@ class ProductTransformer:
                     logger.warning(f"⚠️ Champ obligatoire manquant: {field}")
                     return False
 
-            # Vérification que hfsql_id est un entier positif
-            if not isinstance(record['hfsql_id'], int) or record['hfsql_id'] <= 0:
-                logger.warning(f"⚠️ hfsql_id invalide: {record['hfsql_id']}")
+            # Vérification que hfsql_id est un entier positif - CORRECTION ICI
+            hfsql_id = record.get('hfsql_id')
+
+            # Convertir si nécessaire
+            if isinstance(hfsql_id, str):
+                try:
+                    hfsql_id = int(hfsql_id)
+                    record['hfsql_id'] = hfsql_id  # Mettre à jour dans le record
+                except ValueError:
+                    logger.warning(f"⚠️ hfsql_id non numérique: {record['hfsql_id']}")
+                    return False
+
+            # Vérifier que c'est un entier positif
+            if not isinstance(hfsql_id, int) or hfsql_id <= 0:
+                logger.warning(f"⚠️ hfsql_id invalide: {hfsql_id} (type: {type(hfsql_id)})")
                 return False
 
             # Vérification que le nom n'est pas vide
-            if not record['name'] or len(record['name'].strip()) == 0:
-                logger.warning(f"⚠️ Nom de produit vide")
+            name = record.get('name', '').strip()
+            if not name:
+                logger.warning(f"⚠️ Nom de produit vide pour ID {hfsql_id}")
                 return False
 
-            # Vérification des prix (doivent être >= 0)
-            price_fields = ['price_buy', 'price_sell']
-            for field in price_fields:
-                if field in record and isinstance(record[field], (int, float)):
-                    if record[field] < 0:
-                        logger.warning(f"⚠️ Prix négatif détecté: {field} = {record[field]}")
-                        # On ne rejette pas, on log juste
+            # Mettre à jour le nom nettoyé
+            record['name'] = name
+
+            # Vérification du champ psychotrope (doit être booléen)
+            if 'psychotrope' in record and not isinstance(record['psychotrope'], bool):
+                logger.warning(f"⚠️ Champ psychotrope doit être booléen: {record['psychotrope']}")
+                # Corriger automatiquement
+                record['psychotrope'] = self._convert_to_boolean(record['psychotrope'])
 
             return True
 
@@ -265,32 +301,31 @@ class ProductTransformer:
 
     def get_sample_transformation(self) -> Dict[str, Any]:
         """
-        Retourne un exemple de transformation pour documentation/tests
+        Retourne un exemple de transformation pour documentation/tests - VERSION CORRIGÉE
         """
         sample_hfsql = {
             'id': 123,
             'nom': ' DOLIPRANE 1000MG CPR 8 ',
-            'code_barre': '3400930084267',
             'famille': 'ANTALGIQUES',
-            'fournisseur': 'CERP ROUEN',
-            'prix_achat': '2.50',
-            'prix_vente': '3.85',
-            'marge': '35.0',
-            'quantite_alerte': '5',
-            'stock_actuel': '12'
+            'labo': 'SANOFI',
+            'id_cnas': 'CN123456',
+            'de_equiv': 'DCI001',
+            'psychotrope': '0',  # ou False, 'non', etc.
+            'code_barre_origine': '3400930084267',
+            'quantite_alerte': '5'
+            # PLUS DE PRIX ICI - ils sont maintenant dans purchase_details
         }
 
         expected_output = {
             'hfsql_id': 123,
             'name': 'Doliprane 1000mg Cpr 8',
-            'barcode': '3400930084267',
             'family': 'ANTALGIQUES',
-            'supplier': 'CERP ROUEN',
-            'price_buy': 2.50,
-            'price_sell': 3.85,
-            'margin': 35.0,
+            'labo': 'SANOFI',
+            'id_cnas': 'CN123456',
+            'de_equiv': 'DCI001',
+            'psychotrope': False,
+            'code_barre_origine': '3400930084267',
             'alert_quantity': 5,
-            'current_stock': 12,
             'sync_version': 1,
             'last_synced_at': datetime.now(),
             'created_at': datetime.now()
@@ -299,44 +334,70 @@ class ProductTransformer:
         return {
             'input_sample': sample_hfsql,
             'expected_output': expected_output,
-            'field_mapping': self.field_mapping
+            'field_mapping': self.field_mapping,
+            'removed_fields': [
+                'prix_achat', 'prix_vente', 'marge', 'stock_actuel', 'fournisseur', 'code_barre'
+            ],
+            'new_fields': [
+                'labo', 'id_cnas', 'de_equiv', 'psychotrope', 'code_barre_origine'
+            ]
         }
 
 
 # Utilitaires de test
-async def test_product_transformer():
-    """Test du transformer de produits"""
+async def test_corrected_product_transformer():
+    """Test du transformer de produits corrigé"""
     transformer = ProductTransformer()
 
-    # Test avec des données d'exemple
+    # Test avec des données d'exemple incluant les nouveaux champs
     sample_data = [
         {
             'id': 123,
             'nom': ' DOLIPRANE 1000MG ',
-            'code_barre': '3400930084267',
             'famille': 'ANTALGIQUES',
-            'prix_achat': '2.50',
-            'prix_vente': '3.85'
+            'labo': 'SANOFI',
+            'id_cnas': 'CN123456',
+            'de_equiv': 'DCI001',
+            'psychotrope': '0',
+            'code_barre_origine': '3400930084267',
+            'quantite_alerte': '5'
+            # PLUS DE PRIX - maintenant dans purchase_details
         },
         {
             'id': 124,
             'nom': 'EFFERALGAN 500MG',
-            'code_barre': '3400930087654',
             'famille': 'ANTALGIQUES',
-            'prix_achat': '1.80',
-            'prix_vente': '2.95'
+            'labo': 'UPSA',
+            'id_cnas': 'CN789012',
+            'de_equiv': 'DCI002',
+            'psychotrope': 'false',
+            'code_barre_origine': '3400930087654',
+            'quantite_alerte': '3'
         }
     ]
 
     # Transformation
     transformed = await transformer.transform_batch(sample_data)
 
-    print(f"📊 Test Product Transformer:")
+    print(f"📊 Test Product Transformer Corrigé:")
     print(f"   Entrée: {len(sample_data)} enregistrements")
     print(f"   Sortie: {len(transformed)} enregistrements")
 
     if transformed:
-        print(f"   Premier transformé: {transformed[0]}")
+        print(f"   Premier transformé:")
+        for key, value in transformed[0].items():
+            if key not in ['last_synced_at', 'created_at']:
+                print(f"     - {key}: {value}")
+
+        print(f"   Nouveaux champs:")
+        for field in ['labo', 'id_cnas', 'de_equiv', 'psychotrope', 'code_barre_origine']:
+            if field in transformed[0]:
+                print(f"     ✅ {field}: {transformed[0][field]}")
+
+        print(f"   Champs supprimés (maintenant dans purchase_details):")
+        removed_fields = ['prix_achat', 'prix_vente', 'marge', 'stock_actuel', 'fournisseur']
+        for field in removed_fields:
+            print(f"     🚫 {field}")
 
     return transformed
 
@@ -344,4 +405,4 @@ async def test_product_transformer():
 if __name__ == "__main__":
     import asyncio
 
-    asyncio.run(test_product_transformer())
+    asyncio.run(test_corrected_product_transformer())

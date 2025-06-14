@@ -1,8 +1,8 @@
-# Modèles Synergo
+# Modï¿½les Synergo
 from .sync_models import SyncTable, SyncState, SyncLog
-from .pharma_models import SalesSummary, ProductsCatalog
+from .pharma_models import ProductsCatalog, PurchaseOrders, PurchaseDetails, SalesOrders, SalesDetails, CurrentStockCalculated
 
 __all__ = [
     'SyncTable', 'SyncState', 'SyncLog',
-    'SalesSummary', 'ProductsCatalog'
+    'PurchaseOrders', 'ProductsCatalog', 'PurchaseDetails', 'SalesOrders', 'SalesDetails', 'CurrentStockCalculated',
 ]

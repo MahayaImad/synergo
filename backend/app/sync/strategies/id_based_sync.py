@@ -1,4 +1,4 @@
-# backend/app/sync/strategies/id_based_sync.py
+# backend/app/sync/strategies/id_based_sync.py - VERSION CORRIGÉE
 from typing import List, Dict, Any, Optional
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -193,13 +193,18 @@ class IdBasedSyncStrategy:
             columns = list(sample_record.keys())
             placeholders = [f":{col}" for col in columns]
 
-            # Requête avec ON CONFLICT pour éviter les doublons
+            # CORRECTION: Exclure last_synced_at et created_at des champs mis à jour
+            # pour éviter les doublons dans la clause UPDATE
+            excluded_from_update = ['hfsql_id', 'last_synced_at', 'created_at']
+            update_columns = [col for col in columns if col not in excluded_from_update]
+
+            # Requête avec ON CONFLICT pour éviter les doublons - VERSION CORRIGÉE
             insert_query = f"""
             INSERT INTO {self.schema}.{self.table_name} 
             ({', '.join(columns)})
             VALUES ({', '.join(placeholders)})
             ON CONFLICT (hfsql_id) DO UPDATE SET
-            {', '.join([f"{col} = EXCLUDED.{col}" for col in columns if col != 'hfsql_id'])},
+            {', '.join([f"{col} = EXCLUDED.{col}" for col in update_columns])},
             last_synced_at = CURRENT_TIMESTAMP
             """
 
@@ -239,7 +244,7 @@ class IdBasedSyncStrategy:
                         logger.warning(f"⚠️ Type ID non supporté: {type(value)}")
                         return None
 
-                elif key in ['total_amount', 'payment_amount', 'profit']:
+                elif key in ['total_amount', 'payment_amount', 'profit', 'price_buy', 'price_sell', 'margin']:
                     # Montants en decimal
                     if value is not None:
                         try:
@@ -249,7 +254,7 @@ class IdBasedSyncStrategy:
                     else:
                         clean_record[key] = 0.0
 
-                elif key in ['item_count', 'sync_version']:
+                elif key in ['item_count', 'sync_version', 'alert_quantity', 'current_stock']:
                     # Entiers
                     if value is not None:
                         try:
@@ -259,7 +264,7 @@ class IdBasedSyncStrategy:
                     else:
                         clean_record[key] = 0
 
-                elif key in ['customer', 'cashier', 'register_name']:
+                elif key in ['customer', 'cashier', 'register_name', 'name', 'barcode', 'family', 'supplier']:
                     # Chaînes de caractères
                     clean_record[key] = str(value).strip() if value is not None else ''
 

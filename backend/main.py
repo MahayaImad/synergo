@@ -1,4 +1,4 @@
-# backend/main.py
+# backend/main.py - VERSION CORRIGÉE
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -82,13 +82,14 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Vérification de santé de l'API"""
+    """Vérification de santé de l'API - VERSION CORRIGÉE"""
     try:
-        # Test rapide base de données
-        from app.core.database import get_async_session
+        # Test rapide base de données - CORRECTION ICI
+        from app.core.database import get_async_session_context
         from sqlalchemy import text
 
-        async with get_async_session() as session:
+        # Utiliser le context manager au lieu du générateur
+        async with get_async_session_context() as session:
             await session.execute(text("SELECT 1"))
 
         # État du scheduler
@@ -135,6 +136,60 @@ async def get_system_info():
     }
 
 
+# Test de base de données simple pour debug
+@app.get("/api/v1/db-test")
+async def test_database():
+    """Test simple de la base de données"""
+    try:
+        from app.core.database import get_async_session_context
+        from sqlalchemy import text
+
+        async with get_async_session_context() as session:
+            result = await session.execute(text("SELECT version()"))
+            version = result.fetchone()[0]
+
+        return {
+            "status": "success",
+            "message": "Base de données connectée",
+            "postgres_version": version.split(',')[0],
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Test DB failed: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+# Test de connexion HFSQL
+@app.get("/api/v1/hfsql-test")
+async def test_hfsql():
+    """Test simple de la connexion HFSQL"""
+    try:
+        from app.utils.hfsql_connector import HFSQLConnector
+
+        connector = HFSQLConnector()
+        test_result = await connector.test_connection_step_by_step()
+        connector.close()
+
+        return {
+            "status": "success" if test_result.get("final_status") == "success" else "error",
+            "details": test_result,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Test HFSQL failed: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
 # Gestion d'erreurs globale
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -159,7 +214,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host="localhost",
         port=8000,
         reload=True,
         log_level="info"

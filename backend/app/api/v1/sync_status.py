@@ -218,6 +218,90 @@ async def trigger_manual_sync(background_tasks: BackgroundTasks):
         )
 
 
+@router.post("/start")
+async def start_sync_service():
+    """
+    Démarre le service de synchronisation
+    """
+    try:
+        scheduler = get_scheduler_instance()
+
+        if scheduler.is_running:
+            return {
+                "status": "already_running",
+                "message": "Le service de synchronisation est déjà en cours d'exécution",
+                "scheduler_info": {
+                    "sync_count": scheduler.sync_count,
+                    "uptime_seconds": scheduler.get_status()["uptime_seconds"]
+                }
+            }
+
+        # Démarrer le scheduler en arrière-plan
+        import asyncio
+        asyncio.create_task(SchedulerService.start_sync_service())
+
+        # Attendre un peu pour vérifier que le démarrage s'est bien passé
+        await asyncio.sleep(1)
+
+        status = scheduler.get_status()
+
+        return {
+            "status": "started" if status["is_running"] else "failed",
+            "message": "Service de synchronisation démarré" if status["is_running"] else "Échec du démarrage",
+            "scheduler_info": {
+                "is_running": status["is_running"],
+                "sync_interval_minutes": status["sync_interval_minutes"],
+                "next_sync_time": status.get("next_sync_time")
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur démarrage service sync: {str(e)}"
+        )
+
+
+@router.post("/stop")
+async def stop_sync_service():
+    """
+    Arrête le service de synchronisation
+    """
+    try:
+        scheduler = get_scheduler_instance()
+
+        if not scheduler.is_running:
+            return {
+                "status": "already_stopped",
+                "message": "Le service de synchronisation est déjà arrêté",
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # Arrêter le scheduler
+        await SchedulerService.stop_sync_service()
+
+        # Vérifier l'arrêt
+        status = scheduler.get_status()
+
+        return {
+            "status": "stopped" if not status["is_running"] else "failed",
+            "message": "Service de synchronisation arrêté" if not status["is_running"] else "Échec de l'arrêt",
+            "final_stats": {
+                "total_syncs": status["sync_count"],
+                "total_errors": status["error_count"],
+                "uptime_seconds": status["uptime_seconds"]
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur arrêt service sync: {str(e)}"
+        )
+
+
 @router.get("/health")
 async def sync_health_check():
     """
